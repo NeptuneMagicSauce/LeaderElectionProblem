@@ -302,7 +302,19 @@ private:
 
     void process()
     {
+        enum struct State
+        {
+            Offline,
+            Participating,
+            Decided,
+            Leader,
+        } state = State::Offline;
+
         peers.insert(id);
+
+        // auto startTime =  std::chrono::system_clock::now();
+        auto allReady = false;
+        optional<ID> leader;
 
         // no need to protect for parallel access before we start the other threads
         sendQueue.messages.push({ id, Message::Type::Greetings, "" });
@@ -332,8 +344,73 @@ private:
                     }
                     else
                     {
+                        allReady = true;
                         PrintSafely(to_string(id) + " greetings size "  + to_string(peers.size()));
                     }
+                }
+                else if (msg.type == Message::Type::ElectionStart)
+                {
+                    if (msg.id > id)
+                    {
+                        // unconditionally forward
+                        state = State::Participating;
+                        sendQueue.push(msg);
+                    }
+                    else if (msg.id < id)
+                    {
+                        if (state != State::Participating)
+                        {
+                            // replace the UID in the message with my own UID and send
+                            state = State::Participating;
+                            msg.id = id;
+                            sendQueue.push(msg);
+                        }
+                        else
+                        {
+                            // discard the election message
+                        }
+                    }
+                    else
+                    {
+                        // i am the leader
+                        assert(msg.id == id);
+                        leader = id;
+                        state = State::Leader;
+                        sendQueue.push({ id, Message::Type::ElectedLeader, "" });
+                    }
+                }
+                else if (msg.type == Message::Type::ElectedLeader)
+                {
+                    if (msg.id != id)
+                    {
+                        // marks myself as a decided, record the elected UID, and forward
+                        state = State::Decided;
+                        leader = msg.id;
+                        sendQueue.push(msg);
+                    }
+                    else
+                    {
+                        // election is over
+                    }
+                    assert(leader);
+                    PrintSafely(to_string(id) + " OUR LEADER IS " + to_string(*leader));
+                }
+            }
+
+            if (state == State::Offline
+                && allReady // waiting for my peers to be ready
+                )
+            {
+                /* no need to wait a grace period
+                   because we know when all peers are ready
+                auto secondsSinceStart = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now() - startTime).count();
+                if (secondsSinceStart > 5)
+                */
+                {
+                    // we notice the lack of a leader
+                    state = State::Participating;
+                    sendQueue.push({id, Message::Type::ElectionStart, ""});
                 }
             }
         }
@@ -395,7 +472,7 @@ void unitTestJson()
     vector<json::Message::Type> types =
         {
             json::Message::Type::Greetings,
-            json::Message::Type::Election,
+            json::Message::Type::ElectionStart,
             json::Message::Type::ElectedLeader
         };
     for (auto type: types)
