@@ -152,6 +152,7 @@ public:
     }
     auto getPort() const { return port; }
     auto getID() const { return id; }
+    auto getFinished() const { return finished; }
     void join()
     {
         processThread->join();
@@ -164,7 +165,7 @@ public:
         lock_guard<mutex> guard{printLock};
         std::cout << message << std::endl;
     }
-    static bool loop;
+
 private:
     ID const id;
     int const port;
@@ -200,10 +201,31 @@ private:
     shared_ptr<QTcpServer> listenServer;
     QHostAddress const localhost = QHostAddress::LocalHost;
     set<ID> peers;
+    bool finished = false;
     int const dataStreamVersion = QDataStream::Qt_5_10;
     static mutex printLock;
 
     void sleep() { std::this_thread::sleep_for(200ms); }
+
+    void printMessage(Message const& msg)
+    {
+        ostringstream s;
+        s << to_string(id) << " received ";
+        if (msg.type == Message::Type::Greetings)
+        {
+            s << "Greetings";
+        }
+        else if (msg.type == Message::Type::ElectionStart)
+        {
+            s << "ElectionStart";
+        }
+        else if (msg.type == Message::Type::ElectedLeader)
+        {
+            s << "ElectedLeader";
+        }
+        s << " from " << to_string(msg.id);
+        PrintSafely(s.str());
+    }
 
     void listen()
     {
@@ -221,7 +243,7 @@ private:
             throw std::runtime_error(to_string(id) +  " listenThread nobody connected before timeout");
         }
 
-        while (loop)
+        while (finished == false)
         {
             sleep();
             ostringstream s;
@@ -248,7 +270,7 @@ private:
             } while (in.commitTransaction() == false);
             if (msg.length())
             {
-                PrintSafely(s.str());
+                // PrintSafely(s.str());
                 auto asMessage = from_string(msg.toStdString());
                 if (asMessage)
                 {
@@ -274,7 +296,7 @@ private:
         {
             throw std::runtime_error(to_string(id) + " talk thread Failed to connect socket to port " + to_string(port));
         }
-        while (loop)
+        while (finished == false)
         {
             sleep();
             ostringstream s;
@@ -293,7 +315,7 @@ private:
                 socket->write(block);
                 s << " WRITTEN '" << asString << "'";
                 socket->waitForBytesWritten();
-                PrintSafely(s.str());
+                // PrintSafely(s.str());
             }
         }
         socket->disconnectFromHost();
@@ -323,7 +345,7 @@ private:
         std::this_thread::sleep_for(1000ms);
 
         talkThread = std::make_shared<thread>(&Node::talk, this);
-        while (loop)
+        while (finished == false)
         {
             sleep();
             ostringstream s;
@@ -335,6 +357,8 @@ private:
             if (auto optionalMsg = receiveQueue.pop())
             {
                 auto msg = *optionalMsg;
+                printMessage(msg);
+
                 if (msg.type == Message::Type::Greetings)
                 {
                     if (msg.id != id)
@@ -394,6 +418,7 @@ private:
                     }
                     assert(leader);
                     PrintSafely(to_string(id) + " OUR LEADER IS " + to_string(*leader));
+                    finished = true;
                 }
             }
 
@@ -416,7 +441,6 @@ private:
         }
     }
 };
-bool Node::loop = true;
 mutex Node::printLock;
 
 auto generateNodes(vector<float> const& delays)
@@ -460,7 +484,11 @@ void linkNodes(vector<Node>& nodes)
 
 void endWork(vector<Node>& nodes)
 {
-    Node::loop = false;
+    while (std::any_of(nodes.begin(), nodes.end(), [] (Node const& node) {
+        return node.getFinished() == false; }))
+    {
+        std::this_thread::sleep_for(100ms);
+    }
     for (auto& node: nodes)
     {
         node.join();
@@ -504,7 +532,7 @@ int main(int argc, char** argv)
 
     linkNodes(nodes);
 
-    std::this_thread::sleep_for(3s);
+    // std::this_thread::sleep_for(3s);
     endWork(nodes);
     std::cout << "end main()" << std::endl;
 
