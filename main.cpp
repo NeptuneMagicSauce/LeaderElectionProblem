@@ -7,6 +7,13 @@
 // #include <random>
 #include <chrono>
 #include <set>
+#include<thread>
+#include <mutex>
+#include <queue>
+// #include <sys/socket.h> ouch no!
+// QT sockets: sudo apt install qt6-base-dev
+#include <QTcpSocket>
+#include <QTcpServer>
 
 using namespace std;
 
@@ -64,7 +71,7 @@ auto parseInput(filesystem::path const& path)
     }
     catch (std::exception const&)
     {
-        handleInputError("Failed to parse count at line 0: " + line);
+        handleInputError("Failed to parse count at line 1: " + line);
     }
     if (count < Limits::LowerBound || count > Limits::UpperBound)
     {
@@ -131,6 +138,7 @@ public:
     void link(int neighborPort)
     {
         this->neighborPort = neighborPort;
+        processThread = std::make_shared<thread>(&Node::process, this);
     }
     void print() const
     {
@@ -138,12 +146,108 @@ public:
     }
     auto getPort() const { return port; }
     auto getID() const { return id; }
+    void join()
+    {
+        processThread->join();
+        talkThread->join();
+        listenThread->join();
+    }
+
+    static void PrintSafely(string const& message)
+    {
+        lock_guard<mutex> guard{printLock};
+        std::cout << message << std::endl;
+    }
+    static bool loop;
 private:
     Limits::IDType const id;
     int const port;
     float const delay;
     int neighborPort = 0;
+    shared_ptr<thread> processThread;
+    shared_ptr<thread> talkThread;
+    shared_ptr<thread> listenThread;
+    struct MessageQueue
+    {
+        queue<string> messages;
+        shared_ptr<mutex> lock = make_shared<mutex>();
+    };
+    MessageQueue sendQueue;
+    MessageQueue receiveQueue;
+    shared_ptr<QTcpSocket> talkSocket;
+    shared_ptr<QTcpServer> listenServer;
+    QHostAddress const localhost = QHostAddress::LocalHost;
+    static mutex printLock;
+
+    void sleep() { std::this_thread::sleep_for(100ms); }
+
+    void listen()
+    {
+        listenServer = make_shared<QTcpServer>();
+        if (listenServer->listen(localhost, neighborPort) == false)
+        {
+            throw std::runtime_error(to_string(id) + " listen thread Failed to listen on port " + to_string(neighborPort));
+        }
+        PrintSafely(to_string(id) + " listening on port " + to_string(neighborPort));
+
+        while (loop)
+        {
+            sleep();
+            ostringstream s;
+            s << id << "\tlisten\t\t";
+            // s << &sendQueue.messages;
+            // PrintSafely(s.str());
+
+        }
+        PrintSafely(to_string(id) + " end listen thread");
+    }
+
+    void talk()
+    {
+        auto& socket = talkSocket;
+        socket = make_shared<QTcpSocket>();
+        // PrintSafely("localhost = " + localhost.toStdString());
+        socket->connectToHost(localhost, port);
+        PrintSafely(to_string(id) + " talking on port " + to_string(port));
+        if (socket->waitForConnected(3000) == false)
+        {
+            throw std::runtime_error(to_string(id) + " talk thread Failed to connect socket to port " + to_string(port));
+        }
+        while (loop)
+        {
+            sleep();
+            ostringstream s;
+            s << id << "\ttalk\t\t";
+            // s << &sendQueue.messages;
+            // PrintSafely(s.str());
+        }
+        // PrintSafely(to_string((int)socket->state()));
+        socket->disconnectFromHost();
+        // socket->waitForDisconnected();
+        socket = nullptr;
+        PrintSafely(to_string(id) + " end talk thread");
+        /*
+        */
+    }
+
+    void process()
+    {
+        listenThread = std::make_shared<thread>(&Node::listen, this);
+        std::this_thread::sleep_for(1000ms);
+
+        talkThread = std::make_shared<thread>(&Node::talk, this);
+        while (loop)
+        {
+            sleep();
+            ostringstream s;
+            s << id << "\tprocess\t";
+            // s << &sendQueue.messages;
+            // PrintSafely(s.str());
+        }
+    }
 };
+bool Node::loop = true;
+mutex Node::printLock;
 
 auto generateNodes(vector<float> const& delays)
 {
@@ -184,6 +288,15 @@ void linkNodes(vector<Node>& nodes)
     }
 }
 
+void endWork(vector<Node>& nodes)
+{
+    Node::loop = false;
+    for (auto& node: nodes)
+    {
+        node.join();
+    }
+}
+
 int main(int argc, char** argv)
 {
     auto inputFile = parseCommandLine(argc, argv);
@@ -195,6 +308,10 @@ int main(int argc, char** argv)
     verifyUniqueIDs(nodes);
 
     linkNodes(nodes);
+
+    std::this_thread::sleep_for(3s);
+    endWork(nodes);
+    std::cout << "end main()" << std::endl;
 
     return 0;
 }
