@@ -168,7 +168,11 @@ public:
     void PrintSafely(string const& message) const
     {
         lock_guard<mutex> guard{printLock};
-        std::cout << "[" << to_string(id) << "] " << message << std::endl;
+        std::cout <<
+            "[" <<
+            std::setfill('0') << std::setw(5) <<
+            to_string(id) <<
+            "] " << message << std::endl;
     }
 
 private:
@@ -229,8 +233,10 @@ private:
         {
             s << "ElectedLeader";
         }
-        s << " from " << to_string(msg.id);
-        s << action;
+        s << " from " <<
+            std::setfill('0') << std::setw(5) <<
+            to_string(msg.id);
+        s << ", " << action;
         PrintSafely(s.str());
     }
 
@@ -364,14 +370,14 @@ private:
 
             // s << &sendQueue.messages;
             // PrintSafely(s.str());
-            auto actionDescription =
-                string{", participating:"} +
-                ((state == State::Participating) ? "yes" : "no") +
-                ", ";
+            auto stateDescription =
+                string{"participating:"} +
+                ((state == State::Participating) ? "yes" : "no");
 
             if (auto optionalMsg = receiveQueue.pop())
             {
                 auto msg = *optionalMsg;
+                auto actionDescription = string{};
 
                 if (msg.type == Message::Type::Greetings)
                 {
@@ -441,7 +447,7 @@ private:
                     assert(leader);
                     finished = true;
                 }
-                printMessage(msg, actionDescription);
+                printMessage(msg, stateDescription + ", " + actionDescription);
                 if (finished)
                 {
                     PrintSafely("OUR LEADER IS " + to_string(*leader));
@@ -461,9 +467,8 @@ private:
                 {
                     // we notice the lack of a leader
                     state = State::Participating;
-                    auto msg = Message{id, Message::Type::ElectionStart, ""};
-                    printMessage(msg, actionDescription + "starting an election");
-                    sendQueue.push(msg);
+                    PrintSafely("noticed lack of a leader, " + stateDescription + ", starting an election");
+                    sendQueue.push(Message{id, Message::Type::ElectionStart, ""});
                 }
             }
         }
@@ -477,6 +482,27 @@ auto generateNodes(vector<float> const& delays)
     for (auto const& delay: delays)
     {
         nodes.emplace_back(delay);
+    }
+    for (size_t i=0; i<nodes.size(); ++i)
+    {
+        cout << nodes[i].getID() << "\t";
+        if (i == 0)
+        {
+            cout << "↖";
+        }
+        else if (i == nodes.size() - 1)
+        {
+            cout << "↗";
+        }
+        else
+        {
+            cout << "↑";
+        }
+        cout << endl;
+        if (i != nodes.size() - 1)
+        {
+            cout << "↓" << endl;
+        }
     }
     return nodes;
 }
