@@ -15,6 +15,8 @@
 #include <QTcpSocket>
 #include <QTcpServer>
 
+#include "json.hpp"
+
 using namespace std;
 
 namespace Limits
@@ -96,6 +98,7 @@ auto parseInput(filesystem::path const& path)
         }
         delays.emplace_back(delay);
         // std::cout << "Delay " << i << " delay " << delay << std::endl;
+#warning "support delay per node"
     }
     return delays;
 }
@@ -177,9 +180,10 @@ private:
     shared_ptr<QTcpSocket> talkSocket;
     shared_ptr<QTcpServer> listenServer;
     QHostAddress const localhost = QHostAddress::LocalHost;
+    int const dataStreamVersion = QDataStream::Qt_5_10;
     static mutex printLock;
 
-    void sleep() { std::this_thread::sleep_for(100ms); }
+    void sleep() { std::this_thread::sleep_for(200ms); }
 
     void listen()
     {
@@ -190,14 +194,38 @@ private:
         }
         PrintSafely(to_string(id) + " listening on port " + to_string(neighborPort));
 
+        listenServer->waitForNewConnection(3000);
+        auto socket = listenServer->nextPendingConnection();
+        if (socket == nullptr)
+        {
+            throw std::runtime_error(to_string(id) +  " listenThread nobody connected before timeout");
+        }
+
         while (loop)
         {
             sleep();
             ostringstream s;
             s << id << "\tlisten\t\t";
-            // s << &sendQueue.messages;
-            // PrintSafely(s.str());
-
+            // s << "state " << (int)socket->state();
+            QDataStream in(socket);
+            in.setVersion(dataStreamVersion);
+            QString msg;
+            do
+            {
+                if (socket->waitForReadyRead(100))
+                {
+                    in.startTransaction();
+                    in >> msg;
+                    s << " READ '";
+                    s << msg.toStdString() << "'";
+                    PrintSafely(s.str());
+                }
+                else
+                {
+                    break;
+                }
+            } while (in.commitTransaction() == false);
+            PrintSafely(s.str());
         }
         PrintSafely(to_string(id) + " end listen thread");
     }
@@ -218,16 +246,20 @@ private:
             sleep();
             ostringstream s;
             s << id << "\ttalk\t\t";
-            // s << &sendQueue.messages;
-            // PrintSafely(s.str());
+            // s << " socket state " << (int)socket->state();
+
+            QByteArray block;
+            QDataStream out(&block, QIODevice::WriteOnly);
+            QString message = "message abcd";
+            out.setVersion(dataStreamVersion);
+            out << message;
+            socket->write(block);
+            s << " WRITTEN '" << message.toStdString() << "'";
+            socket->waitForBytesWritten();
+            PrintSafely(s.str());
         }
-        // PrintSafely(to_string((int)socket->state()));
         socket->disconnectFromHost();
-        // socket->waitForDisconnected();
-        socket = nullptr;
         PrintSafely(to_string(id) + " end talk thread");
-        /*
-        */
     }
 
     void process()
@@ -297,8 +329,33 @@ void endWork(vector<Node>& nodes)
     }
 }
 
+void unitTestJson()
+{
+    vector<json::Message::Type> types =
+        {
+            json::Message::Type::Booted,
+            json::Message::Type::ElectionStart,
+            json::Message::Type::ElectedLeader
+        };
+    for (auto type: types)
+    {
+        json::Message m = { 5584, type, "iorjjkgfd" };
+        auto s = json::to_string(m);
+        cout << endl << s << endl;
+        auto m2 = json::from_string(s);
+        cout << endl << (m2 ? "parsed" : "empty") << endl;
+        if (m2)
+        {
+            cout << endl << json::to_string(*m2) << endl;
+        }
+    }
+}
+
 int main(int argc, char** argv)
 {
+    // unitTestJson();
+    // return 0;
+
     auto inputFile = parseCommandLine(argc, argv);
 
     auto delays = parseInput(inputFile);
