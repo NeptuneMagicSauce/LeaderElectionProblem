@@ -18,6 +18,7 @@
 #include "json.hpp"
 
 using namespace std;
+using namespace json;
 
 namespace Limits
 {
@@ -106,6 +107,8 @@ auto parseInput(filesystem::path const& path)
 class Node
 {
 private:
+    using ID = Limits::IDType;
+
     static auto generateID()
     {
         /* random number : no guarantee on uniqueness
@@ -115,7 +118,7 @@ private:
             return ret;
         }();
 
-        std::uniform_int_distribution<Limits::IDType> distrib { Limits::LowerBound, Limits::UpperBound };
+        std::uniform_int_distribution<ID> distrib { Limits::LowerBound, Limits::UpperBound };
         return distrib(random_generator);
         */
 
@@ -163,7 +166,7 @@ public:
     }
     static bool loop;
 private:
-    Limits::IDType const id;
+    ID const id;
     int const port;
     float const delay;
     int neighborPort = 0;
@@ -172,14 +175,31 @@ private:
     shared_ptr<thread> listenThread;
     struct MessageQueue
     {
-        queue<string> messages;
+        queue<Message> messages;
         shared_ptr<mutex> lock = make_shared<mutex>();
+        void push(Message const& msg)
+        {
+            lock_guard<mutex> guard{*lock};
+            messages.push(msg);
+        }
+        optional<Message> pop()
+        {
+            lock_guard<mutex> guard{*lock};
+            if (messages.empty())
+            {
+                return {};
+            }
+            auto msg = messages.front();
+            messages.pop();
+            return msg;
+        }
     };
     MessageQueue sendQueue;
     MessageQueue receiveQueue;
     shared_ptr<QTcpSocket> talkSocket;
     shared_ptr<QTcpServer> listenServer;
     QHostAddress const localhost = QHostAddress::LocalHost;
+    set<ID> peers;
     int const dataStreamVersion = QDataStream::Qt_5_10;
     static mutex printLock;
 
@@ -216,16 +236,29 @@ private:
                 {
                     in.startTransaction();
                     in >> msg;
+                    // in.commitTransaction();
                     s << " READ '";
                     s << msg.toStdString() << "'";
-                    PrintSafely(s.str());
+                    // PrintSafely(s.str());
                 }
                 else
                 {
                     break;
                 }
             } while (in.commitTransaction() == false);
-            PrintSafely(s.str());
+            if (msg.length())
+            {
+                PrintSafely(s.str());
+                auto asMessage = from_string(msg.toStdString());
+                if (asMessage)
+                {
+                    receiveQueue.push(*asMessage);
+                }
+                else
+                {
+                    PrintSafely("Failed to parse json: " + msg.toStdString());
+                }
+            }
         }
         PrintSafely(to_string(id) + " end listen thread");
     }
@@ -248,15 +281,20 @@ private:
             s << id << "\ttalk\t\t";
             // s << " socket state " << (int)socket->state();
 
-            QByteArray block;
-            QDataStream out(&block, QIODevice::WriteOnly);
-            QString message = "message abcd";
-            out.setVersion(dataStreamVersion);
-            out << message;
-            socket->write(block);
-            s << " WRITTEN '" << message.toStdString() << "'";
-            socket->waitForBytesWritten();
-            PrintSafely(s.str());
+            auto message = sendQueue.pop();
+            if (message)
+            {
+                QByteArray block;
+                QDataStream out(&block, QIODevice::WriteOnly);
+                out.setVersion(dataStreamVersion);
+                auto asString = to_string(*message);
+                // auto asString = string{"message defg"};
+                out << QString::fromStdString(asString);
+                socket->write(block);
+                s << " WRITTEN '" << asString << "'";
+                socket->waitForBytesWritten();
+                PrintSafely(s.str());
+            }
         }
         socket->disconnectFromHost();
         PrintSafely(to_string(id) + " end talk thread");
@@ -264,6 +302,11 @@ private:
 
     void process()
     {
+        peers.insert(id);
+
+        // no need to protect for parallel access before we start the other threads
+        sendQueue.messages.push({ id, Message::Type::Greetings, "" });
+
         listenThread = std::make_shared<thread>(&Node::listen, this);
         std::this_thread::sleep_for(1000ms);
 
@@ -273,8 +316,26 @@ private:
             sleep();
             ostringstream s;
             s << id << "\tprocess\t";
+
             // s << &sendQueue.messages;
             // PrintSafely(s.str());
+
+            if (auto optionalMsg = receiveQueue.pop())
+            {
+                auto msg = *optionalMsg;
+                if (msg.type == Message::Type::Greetings)
+                {
+                    if (msg.id != id)
+                    {
+                        peers.insert(msg.id);
+                        sendQueue.push(msg);
+                    }
+                    else
+                    {
+                        PrintSafely(to_string(id) + " greetings size "  + to_string(peers.size()));
+                    }
+                }
+            }
         }
     }
 };
@@ -333,8 +394,8 @@ void unitTestJson()
 {
     vector<json::Message::Type> types =
         {
-            json::Message::Type::Booted,
-            json::Message::Type::ElectionStart,
+            json::Message::Type::Greetings,
+            json::Message::Type::Election,
             json::Message::Type::ElectedLeader
         };
     for (auto type: types)
