@@ -81,6 +81,10 @@ auto parseInput(filesystem::path const& path)
         handleInputError("Count does not fit in an unsigned 16-bit integer: " + std::to_string(count));
     }
     std::cout << "Count: " << count << std::endl;
+    if (count == 0)
+    {
+        handleInputError("No election with zero voter");
+    }
     vector<float> delays;
     for (int i=0; i<count; ++i)
     {
@@ -99,7 +103,6 @@ auto parseInput(filesystem::path const& path)
         }
         delays.emplace_back(delay);
         // std::cout << "Delay " << i << " delay " << delay << std::endl;
-#warning "support delay per node"
     }
     return delays;
 }
@@ -139,20 +142,22 @@ public:
         port(generatePort()),
         delay(delay)
     {
-        // cout << "Node " << id << " port " << port <<  " delay " << delay << endl;
     }
-    void link(int neighborPort)
+    void linkAndStart(int neighborPort)
     {
         this->neighborPort = neighborPort;
         processThread = std::make_shared<thread>(&Node::process, this);
     }
-    void print() const
+    void printDescription() const
     {
-        cout << "Node " << id << " port " << port <<  " listening to " << neighborPort <<  " delay " << delay << endl;
+        ostringstream s;
+        s << "Starting to talk to port " << port <<  " and to listen to " << neighborPort <<  " with delay " << delay;
+        PrintSafely(s.str());
     }
     auto getPort() const { return port; }
     auto getID() const { return id; }
     auto getFinished() const { return finished; }
+    auto getLeader() const { return leader; }
     void join()
     {
         processThread->join();
@@ -160,10 +165,10 @@ public:
         listenThread->join();
     }
 
-    static void PrintSafely(string const& message)
+    void PrintSafely(string const& message) const
     {
         lock_guard<mutex> guard{printLock};
-        std::cout << message << std::endl;
+        std::cout << "[" << to_string(id) << "] " << message << std::endl;
     }
 
 private:
@@ -201,16 +206,17 @@ private:
     shared_ptr<QTcpServer> listenServer;
     QHostAddress const localhost = QHostAddress::LocalHost;
     set<ID> peers;
+    optional<ID> leader;
     bool finished = false;
     int const dataStreamVersion = QDataStream::Qt_5_10;
     static mutex printLock;
 
     void sleep() { std::this_thread::sleep_for(200ms); }
 
-    void printMessage(Message const& msg)
+    void printMessage(Message const& msg, string const& action)
     {
         ostringstream s;
-        s << to_string(id) << " received ";
+        s << "received ";
         if (msg.type == Message::Type::Greetings)
         {
             s << "Greetings";
@@ -224,6 +230,7 @@ private:
             s << "ElectedLeader";
         }
         s << " from " << to_string(msg.id);
+        s << action;
         PrintSafely(s.str());
     }
 
@@ -234,7 +241,7 @@ private:
         {
             throw std::runtime_error(to_string(id) + " listen thread Failed to listen on port " + to_string(neighborPort));
         }
-        PrintSafely(to_string(id) + " listening on port " + to_string(neighborPort));
+        PrintSafely("listening on port " + to_string(neighborPort));
 
         listenServer->waitForNewConnection(3000);
         auto socket = listenServer->nextPendingConnection();
@@ -247,7 +254,7 @@ private:
         {
             sleep();
             ostringstream s;
-            s << id << "\tlisten\t\t";
+            s << "\tlisten\t\t";
             // s << "state " << (int)socket->state();
             QDataStream in(socket);
             in.setVersion(dataStreamVersion);
@@ -282,7 +289,7 @@ private:
                 }
             }
         }
-        PrintSafely(to_string(id) + " end listen thread");
+        PrintSafely("end listen thread");
     }
 
     void talk()
@@ -291,7 +298,7 @@ private:
         socket = make_shared<QTcpSocket>();
         // PrintSafely("localhost = " + localhost.toStdString());
         socket->connectToHost(localhost, port);
-        PrintSafely(to_string(id) + " talking on port " + to_string(port));
+        PrintSafely("talking on port " + to_string(port));
         if (socket->waitForConnected(3000) == false)
         {
             throw std::runtime_error(to_string(id) + " talk thread Failed to connect socket to port " + to_string(port));
@@ -300,12 +307,14 @@ private:
         {
             sleep();
             ostringstream s;
-            s << id << "\ttalk\t\t";
+            s << "\ttalk\t\t";
             // s << " socket state " << (int)socket->state();
 
             auto message = sendQueue.pop();
             if (message)
             {
+#warning "re enable delay"
+                // std::this_thread::sleep_for(chrono::milliseconds(static_cast<int>(1000 * delay)));
                 QByteArray block;
                 QDataStream out(&block, QIODevice::WriteOnly);
                 out.setVersion(dataStreamVersion);
@@ -319,7 +328,7 @@ private:
             }
         }
         socket->disconnectFromHost();
-        PrintSafely(to_string(id) + " end talk thread");
+        PrintSafely("end talk thread");
     }
 
     void process()
@@ -336,8 +345,10 @@ private:
 
         // auto startTime =  std::chrono::system_clock::now();
         auto allReady = false;
-        optional<ID> leader;
 
+        // spec says "then it will send a message indicating its unique ID"
+        // which is ambiguous as regards the message type
+        // we will thus call this message Greetings
         // no need to protect for parallel access before we start the other threads
         sendQueue.messages.push({ id, Message::Type::Greetings, "" });
 
@@ -349,27 +360,32 @@ private:
         {
             sleep();
             ostringstream s;
-            s << id << "\tprocess\t";
+            s << "\tprocess\t";
 
             // s << &sendQueue.messages;
             // PrintSafely(s.str());
+            auto actionDescription =
+                string{", participating:"} +
+                ((state == State::Participating) ? "yes" : "no") +
+                ", ";
 
             if (auto optionalMsg = receiveQueue.pop())
             {
                 auto msg = *optionalMsg;
-                printMessage(msg);
 
                 if (msg.type == Message::Type::Greetings)
                 {
                     if (msg.id != id)
                     {
                         peers.insert(msg.id);
+                        actionDescription += "forwarding";
                         sendQueue.push(msg);
                     }
                     else
                     {
                         allReady = true;
-                        PrintSafely(to_string(id) + " greetings size "  + to_string(peers.size()));
+                        actionDescription += "noop";
+                        PrintSafely("greetings size "  + to_string(peers.size()));
                     }
                 }
                 else if (msg.type == Message::Type::ElectionStart)
@@ -378,6 +394,7 @@ private:
                     {
                         // unconditionally forward
                         state = State::Participating;
+                        actionDescription += "forwarding";
                         sendQueue.push(msg);
                     }
                     else if (msg.id < id)
@@ -387,11 +404,13 @@ private:
                             // replace the UID in the message with my own UID and send
                             state = State::Participating;
                             msg.id = id;
+                            actionDescription += "forwarding with my id";
                             sendQueue.push(msg);
                         }
                         else
                         {
                             // discard the election message
+                            actionDescription += "noop";
                         }
                     }
                     else
@@ -400,6 +419,7 @@ private:
                         assert(msg.id == id);
                         leader = id;
                         state = State::Leader;
+                        actionDescription += "sending i am the leader";
                         sendQueue.push({ id, Message::Type::ElectedLeader, "" });
                     }
                 }
@@ -410,15 +430,21 @@ private:
                         // marks myself as a decided, record the elected UID, and forward
                         state = State::Decided;
                         leader = msg.id;
+                        actionDescription += "forwarding";
                         sendQueue.push(msg);
                     }
                     else
                     {
+                        actionDescription += "noop";
                         // election is over
                     }
                     assert(leader);
-                    PrintSafely(to_string(id) + " OUR LEADER IS " + to_string(*leader));
                     finished = true;
+                }
+                printMessage(msg, actionDescription);
+                if (finished)
+                {
+                    PrintSafely("OUR LEADER IS " + to_string(*leader));
                 }
             }
 
@@ -435,7 +461,9 @@ private:
                 {
                     // we notice the lack of a leader
                     state = State::Participating;
-                    sendQueue.push({id, Message::Type::ElectionStart, ""});
+                    auto msg = Message{id, Message::Type::ElectionStart, ""};
+                    printMessage(msg, actionDescription + "starting an election");
+                    sendQueue.push(msg);
                 }
             }
         }
@@ -467,18 +495,19 @@ void verifyUniqueIDs(vector<Node> const& nodes)
     }
 }
 
-void linkNodes(vector<Node>& nodes)
+void startNodes(vector<Node>& nodes)
 {
+    // link to neighbor and start processing, listening and talking
     for (size_t i=0; i<nodes.size(); ++i)
     {
         // std::cout << "index " << i << " neighbor " << (i + nodes.size() - 1) % nodes.size() << std::endl;
         auto const& counterClockwiseNeighbor =
             nodes.at((i + nodes.size() - 1) % nodes.size());
-        nodes[i].link(counterClockwiseNeighbor.getPort());
+        nodes[i].linkAndStart(counterClockwiseNeighbor.getPort());
     }
     for (auto const& node: nodes)
     {
-        node.print();
+        node.printDescription();
     }
 }
 
@@ -492,6 +521,24 @@ void endWork(vector<Node>& nodes)
     for (auto& node: nodes)
     {
         node.join();
+    }
+
+    auto leader = nodes.front().getLeader();
+    if (std::any_of(nodes.begin(), nodes.end(), [&leader, &nodes] (Node const& node) {
+        if (!node.getLeader())
+        {
+            cout << "Leader: none for id " << node.getID() << endl;
+            return true;
+        }
+        if (node.getLeader() != leader)
+        {
+            cout << "Leaders differ: " << to_string(*node.getLeader()) << " for " << to_string(node.getID()) <<
+                " and " << (leader ? to_string(*leader) : "none") << " for " << to_string(nodes.front().getID()) <<
+                endl;
+        }
+        return false; }))
+    {
+        throw std::runtime_error("No consensus");
     }
 }
 
@@ -530,9 +577,8 @@ int main(int argc, char** argv)
 
     verifyUniqueIDs(nodes);
 
-    linkNodes(nodes);
+    startNodes(nodes);
 
-    // std::this_thread::sleep_for(3s);
     endWork(nodes);
     std::cout << "end main()" << std::endl;
 
