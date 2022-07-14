@@ -4,7 +4,9 @@
 #include <fstream>
 #include <limits>
 #include <vector>
-#include <random>
+// #include <random>
+#include <chrono>
+#include <set>
 
 using namespace std;
 
@@ -68,7 +70,7 @@ auto parseInput(filesystem::path const& path)
     {
         handleInputError("Count does not fit in an unsigned 16-bit integer: " + std::to_string(count));
     }
-    std::cout << "[count] " << count << std::endl;
+    std::cout << "Count: " << count << std::endl;
     vector<float> delays;
     for (int i=0; i<count; ++i)
     {
@@ -96,6 +98,7 @@ class Node
 private:
     static auto generateID()
     {
+        /* random number : no guarantee on uniqueness
         static std::mt19937 random_generator = [] () {
             auto ret = std::mt19937 { std::random_device{}() };
             ret.seed(time(0));
@@ -104,6 +107,13 @@ private:
 
         std::uniform_int_distribution<Limits::IDType> distrib { Limits::LowerBound, Limits::UpperBound };
         return distrib(random_generator);
+        */
+
+        static std::chrono::_V2::high_resolution_clock clock;
+        auto ticks = clock.now().time_since_epoch().count();
+        ticks %= Limits::UpperBound;
+        // std::cout << "clock " << ticks << std::endl;
+        return ticks;
     }
     static auto generatePort()
     {
@@ -127,6 +137,7 @@ public:
         cout << "Node " << id << " port " << port <<  " listening to " << neighborPort <<  " delay " << delay << endl;
     }
     auto getPort() const { return port; }
+    auto getID() const { return id; }
 private:
     Limits::IDType const id;
     int const port;
@@ -142,6 +153,20 @@ auto generateNodes(vector<float> const& delays)
         nodes.emplace_back(delay);
     }
     return nodes;
+}
+
+void verifyUniqueIDs(vector<Node> const& nodes)
+{
+    set<Limits::IDType> ids;
+    for (auto const& node: nodes)
+    {
+        auto id = node.getID();
+        if (ids.count(id))
+        {
+            throw std::runtime_error("This ID is not unique, assigned to multiple nodes: " + std::to_string(id));
+        }
+        ids.insert(id);
+    }
 }
 
 void linkNodes(vector<Node>& nodes)
@@ -166,6 +191,8 @@ int main(int argc, char** argv)
     auto delays = parseInput(inputFile);
 
     auto nodes = generateNodes(delays);
+
+    verifyUniqueIDs(nodes);
 
     linkNodes(nodes);
 
