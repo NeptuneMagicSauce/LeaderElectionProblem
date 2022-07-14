@@ -3,12 +3,13 @@ SOURCES=$(wildcard *.cpp)
 OBJECTS = $(patsubst %.cpp, %.o, $(SOURCES))
 TARGET=main
 
-FLAGS=-g -std=c++17
+FLAGS=-g -std=c++17 -fPIC
 CXXFLAGS=-Wall -Wextra
-LDFLAGS=
+INCLUDES=-I/usr/include/x86_64-linux-gnu/qt6/QtNetwork/ -I/usr/include/x86_64-linux-gnu/qt6/
+LDFLAGS=-lQt6Core -lQt6Network
 
 %.o: %.cpp $(HEADERS)
-	g++ $(CXXFLAGS) $(FLAGS) -c $< -o $@
+	g++ $(CXXFLAGS) $(FLAGS) $(INCLUDES) -c $< -o $@
 
 $(TARGET): $(OBJECTS)
 	g++ $(OBJECTS) $(LDFLAGS) $(FLAGS) -o $@
