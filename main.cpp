@@ -212,15 +212,23 @@ private:
     set<ID> peers;
     optional<ID> leader;
     bool finished = false;
+    enum struct Direction { Receive, Send };
     int const dataStreamVersion = QDataStream::Qt_5_10;
     static mutex printLock;
 
     void sleep() { std::this_thread::sleep_for(200ms); }
 
-    void printMessage(Message const& msg, string const& action)
+    void printMessage(Message const& msg, Direction direction, string const& action)
     {
         ostringstream s;
-        s << "received ";
+        if (direction == Direction::Receive)
+        {
+            s << "received ";
+        }
+        else if (direction == Direction::Send)
+        {
+            s << "sending ";
+        }
         if (msg.type == Message::Type::Greetings)
         {
             s << "Greetings";
@@ -236,7 +244,10 @@ private:
         s << " from " <<
             std::setfill('0') << std::setw(5) <<
             to_string(msg.id);
-        s << ", " << action;
+        if (action.length())
+        {
+            s << ", " << action;
+        }
         PrintSafely(s.str());
     }
 
@@ -319,6 +330,7 @@ private:
             auto message = sendQueue.pop();
             if (message)
             {
+                printMessage(*message, Direction::Send, "");
 #warning "re enable delay"
                 // std::this_thread::sleep_for(chrono::milliseconds(static_cast<int>(1000 * delay)));
                 QByteArray block;
@@ -391,7 +403,7 @@ private:
                     {
                         allReady = true;
                         actionDescription += "noop";
-                        PrintSafely("greetings size "  + to_string(peers.size()));
+                        // PrintSafely("greetings size "  + to_string(peers.size()));
                     }
                 }
                 else if (msg.type == Message::Type::ElectionStart)
@@ -447,7 +459,7 @@ private:
                     assert(leader);
                     finished = true;
                 }
-                printMessage(msg, stateDescription + ", " + actionDescription);
+                printMessage(msg, Direction::Receive, stateDescription + ", " + actionDescription);
                 if (finished)
                 {
                     PrintSafely("OUR LEADER IS " + to_string(*leader));
@@ -485,7 +497,9 @@ auto generateNodes(vector<float> const& delays)
     }
     for (size_t i=0; i<nodes.size(); ++i)
     {
-        cout << nodes[i].getID() << "\t";
+        cout <<
+            std::setfill('0') << std::setw(5) <<
+            nodes[i].getID() << "\t";
         if (i == 0)
         {
             cout << "↖";
