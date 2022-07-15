@@ -287,22 +287,23 @@ private:
             QDataStream in(socket);
             in.setVersion(dataStreamVersion);
             QString msg;
-            do
+            // do
             {
                 if (socket->waitForReadyRead(100))
                 {
-                    in.startTransaction();
+                    // in.startTransaction();
                     in >> msg;
-                    // in.commitTransaction();
                     s << " READ '";
                     s << msg.toStdString() << "'";
                     // PrintSafely(s.str());
                 }
-                else
-                {
-                    break;
-                }
-            } while (in.commitTransaction() == false);
+            //     else
+            //     {
+            //         break;
+            //     }
+            // } while (in.commitTransaction() == false);
+            }
+
             if (msg.length())
             {
                 // PrintSafely(s.str());
