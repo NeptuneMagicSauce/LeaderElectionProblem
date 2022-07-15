@@ -653,7 +653,7 @@ void printCollisionProbability()
             {
                 break;
             }
-            remainingIDs--;
+            --remainingIDs;
         }
         return 1 - probaNoCollision;
     };
