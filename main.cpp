@@ -127,6 +127,7 @@ private:
 
         static std::chrono::_V2::high_resolution_clock clock;
         auto ticks = clock.now().time_since_epoch().count();
+        ticks *= ticks; // so that it's not so neatly ordered
         ticks %= Limits::UpperBound;
         // std::cout << "clock " << ticks << std::endl;
         return ticks;
@@ -203,6 +204,11 @@ private:
             messages.pop();
             return msg;
         }
+        auto size()
+        {
+            lock_guard<mutex> guard{*lock};
+            return messages.size();
+        }
     };
     MessageQueue sendQueue;
     MessageQueue receiveQueue;
@@ -220,6 +226,11 @@ private:
 
     void printMessage(Message const& msg, Direction direction, string const& action)
     {
+        if (msg.type == Message::Type::Greetings)
+        {
+            return;
+        }
+
         ostringstream s;
         if (direction == Direction::Receive)
         {
@@ -330,7 +341,7 @@ private:
             auto message = sendQueue.pop();
             if (message)
             {
-                printMessage(*message, Direction::Send, "");
+                printMessage(*message, Direction::Send, "still in queue: " + to_string(sendQueue.size()));
 #warning "re enable delay"
                 // std::this_thread::sleep_for(chrono::milliseconds(static_cast<int>(1000 * delay)));
                 QByteArray block;
@@ -341,7 +352,10 @@ private:
                 out << QString::fromStdString(asString);
                 socket->write(block);
                 s << " WRITTEN '" << asString << "'";
+
                 socket->waitForBytesWritten();
+                // socket->flush();
+
                 // PrintSafely(s.str());
             }
         }
@@ -480,7 +494,7 @@ private:
                     // we notice the lack of a leader
                     state = State::Participating;
                     PrintSafely("noticed lack of a leader, " + stateDescription + ", starting an election");
-                    sendQueue.push(Message{id, Message::Type::ElectionStart, ""});
+                    sendQueue.push(Message{id, Message::Type::ElectionStart, "something"});
                 }
             }
         }
