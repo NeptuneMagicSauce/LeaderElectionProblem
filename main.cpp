@@ -169,13 +169,24 @@ public:
     void PrintSafely(string const& message) const
     {
         lock_guard<mutex> guard{printLock};
-        std::cout <<
+        ostringstream s;
+        s <<
             "[" <<
             std::setfill('0') << std::setw(5) <<
             to_string(id) <<
             "] " << message << std::endl;
+        cout << s.str();
+        try
+        {
+            // in production code, I would have a lock for each of the sinks: cout and the file
+            // for fewer lock contention
+            ofstream log{outputPath, ios_base::app};
+            log << s.str();
+        }
+        catch (std::exception const&) { }
     }
 
+    static string const outputPath;
 private:
     ID const id;
     int const port;
@@ -344,8 +355,8 @@ private:
             if (message)
             {
                 printMessage(*message, Direction::Send, "still in queue: " + to_string(sendQueue.size()));
-#warning "re enable delay"
-                // std::this_thread::sleep_for(chrono::milliseconds(static_cast<int>(1000 * delay)));
+// #warning "re enable delay"
+                std::this_thread::sleep_for(chrono::milliseconds(static_cast<int>(1000 * delay)));
                 QByteArray block;
                 QDataStream out(&block, QIODevice::WriteOnly);
                 out.setVersion(dataStreamVersion);
@@ -503,6 +514,7 @@ private:
     }
 };
 mutex Node::printLock;
+string const Node::outputPath = "output.log";
 
 auto generateNodes(vector<float> const& delays)
 {
@@ -553,6 +565,13 @@ void verifyUniqueIDs(vector<Node> const& nodes)
 
 void startNodes(vector<Node>& nodes)
 {
+    // clear the log file
+    try
+    {
+        filesystem::remove(Node::outputPath);
+    }
+    catch (std::exception const&) { }
+
     // link to neighbor and start processing, listening and talking
     for (size_t i=0; i<nodes.size(); ++i)
     {
