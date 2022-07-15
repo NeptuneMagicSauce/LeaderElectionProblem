@@ -639,8 +639,40 @@ void unitTestJson()
     }
 }
 
+void printCollisionProbability()
+{
+    auto probabilityOfACollision = [] (int numberOfNodes) {
+        auto const totalIDs = 65536;
+        auto remainingIDs = totalIDs;
+        auto probaNoCollision = 1.0f;
+
+        for (int i=0; i<numberOfNodes; ++i)
+        {
+            probaNoCollision *= (float)remainingIDs / totalIDs;
+            if (probaNoCollision < 0.00001)
+            {
+                break;
+            }
+            remainingIDs--;
+        }
+        return 1 - probaNoCollision;
+    };
+
+    for (int i=0; i<=65536; ++i)
+    {
+        std::cout <<
+            "probability of a collision for " << i << " nodes = \t" <<
+            std::fixed <<
+            std::setprecision(2) <<
+            probabilityOfACollision(i) * 100 << "%" << endl;
+    }
+}
+
 int main(int argc, char** argv)
 {
+    // printCollisionProbability();
+    // return 0;
+
     // unitTestJson();
     // return 0;
 
