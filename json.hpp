@@ -64,8 +64,6 @@ namespace json
             if (posValue == string::npos) { return {}; }
             posValue = prefixValue.size();
             auto lineValue = line.substr(posValue, line.size() - posValue);
-            // if (!lineValue.size() || lineValue.at(lineValue.size() - 1) != ',') { return {}; }
-            // msg.value = lineValue.substr(0, lineValue.size() - 1);
             msg.value = lineValue;
             return msg;
         }
